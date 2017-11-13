@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 
-import sys,bisect
+import sys,time,bisect
 
 ESCAPE = '\\'
 MAX_WORD_BITS = 4
+DEBUG = False
 
 MIN_WORD = 4
 MAX_WORD = 2**MAX_WORD_BITS
@@ -13,9 +14,13 @@ MAX_REL = 2**MAX_REL_BITS
 def compress(instr):
 
   s = instr.replace(ESCAPE,'')
+  doc = Document(len(s))
+
+  tic = time.time()
 
   i = 0
   while i<len(s)-MAX_WORD:
+    sys.stdout.write('%.2f%%\r' % (100.0*i/(len(s)-MAX_WORD)))
     for l in range(MAX_WORD+MIN_WORD,MIN_WORD-1,-1):
       word = s[i:i+l]
       if '\n' in word:
@@ -24,16 +29,22 @@ def compress(instr):
       while start>0:
         try:
           match = s.index(word,start)
-          print '"%s" @ %s' % (word.replace('\n','\\n'),match)
+          if DEBUG:
+            print '"%s" @ %s' % (word.replace('\n','\\n'),match)
         except ValueError:
           match = -1
         else:
-          print (match-i,l)
-          s = s[:match]+ESCAPE+encode(match-i,l)+s[match+l:]
+          if DEBUG:
+            print (match-i,l)
+          doc.add_match(Match(i,l,match))
         start = match+1
     i += 1
 
-  return ESCAPE+s
+  print 'Search took %s sec' % (time.time()-tic)
+
+  print doc.matches
+
+  return instr
 
 def decompress(outstr):
 
@@ -44,7 +55,9 @@ def decompress(outstr):
   while i>=0:
     if s[i]==escape:
       (rel,length) = decode(s[i+1:i+3])
-      print '%s:%s = "%s"' % (i-rel,i-rel+length,s[i-rel:i-rel+length].replace('\n','\\n'))
+      if DEBUG:
+        print ('%s:%s = "%s"'
+            % (i-rel,i-rel+length,s[i-rel:i-rel+length].replace('\n','\\n')))
       s = s[:i]+s[i-rel:i-rel+length]+s[i+3:]
     i -= 1
 
@@ -63,13 +76,15 @@ class Document(object):
 
     for m in self.matches:
       if match.intersects(m):
-        return
+        return False
 
     r = Range(self.length,(match.found_start,match.found_end))
     if r.intersects(self.protected):
-      return
+      return False
 
-    raise NotImplemented
+    bisect.insort(self.matches,match)
+    self.protected += Range(self.length,(match.ref_start,match.ref_end))
+    return True
 
 class Match(object):
 
@@ -93,6 +108,13 @@ class Match(object):
     return (
       self.found_start<other.found_end and self.found_end>other.found_start
     )
+
+  def __str__(self):
+
+    return ('%s:%s = %s:%s'
+        % (self.found_start,self.found_end,self.ref_start,self.ref_end))
+
+  __repr__ = __str__
 
 class Range(object):
 
