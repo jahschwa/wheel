@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 
 import sys,time,bisect
+from collections import OrderedDict
 
 ESCAPE = '\\'
+#~ BLACKLIST = []
+BLACKLIST = ['\n',' ']
 MAX_WORD_BITS = 4
+MIN_COUNT = 1
 DEBUG = False
 
 MIN_WORD = 4
@@ -14,35 +18,53 @@ MAX_REL = 2**MAX_REL_BITS
 def compress(instr):
 
   s = instr.replace(ESCAPE,'')
-  doc = Document(len(s))
 
   tic = time.time()
-
+  replace = OrderedDict()
   i = 0
-  while i<len(s)-MAX_WORD:
-    sys.stdout.write('%.2f%%\r' % (100.0*i/(len(s)-MAX_WORD)))
+  done = len(s)-(MIN_COUNT+1)*MIN_WORD
+  while i<done:
+    sys.stdout.write('Building dictionary... %.2f%%\r' % (100.0*i/done))
     for l in range(MAX_WORD+MIN_WORD,MIN_WORD-1,-1):
       word = s[i:i+l]
-      if '\n' in word:
+      skip = False
+      for x in BLACKLIST:
+        if x in word:
+          skip = True
+          break
+      if skip:
         continue
-      start = i+1
-      while start>0:
-        try:
-          match = s.index(word,start)
-          if DEBUG:
-            print '"%s" @ %s' % (word.replace('\n','\\n'),match)
-        except ValueError:
-          match = -1
-        else:
-          if DEBUG:
-            print (match-i,l)
-          doc.add_match(Match(i,l,match))
-        start = match+1
+      if word in replace:
+        i += len(word)-1
+        break
+      replace[word] = s.count(word)
+      if replace[word]>MIN_COUNT:
+        i += len(word)-1
+        break
     i += 1
 
-  print 'Search took %s sec' % (time.time()-tic)
+  print '\nSearch took %s sec' % (time.time()-tic)
+  print 'Dictionary has %s words (file was %s characters)' % (len(replace),len(s))
 
-  print doc.matches
+  tic = time.time()
+  replace = [(k,v) for (k,v) in replace.items() if v>MIN_COUNT]
+  x = sorted(replace,key=lambda a:a[1]*(len(a[0])-3),reverse=True)
+
+  print 'Found %s words that appeared at least %s times' % (len(x),MIN_COUNT+1)
+  new = []
+  for i in x:
+    add = True
+    for j in new:
+      if i[0] in j[0] or j[0] in i[0]:
+        add = False
+        break
+    if add:
+      new.append(i)
+  print 'Left with %s words after deduplication' % len(new)
+  print 'Sorting took %s sec' % (time.time()-tic)
+  print '\n'.join(['%5s "%s"' % (v,k.replace('\n','\\n')) for (k,v) in new[:10]])
+
+  
 
   return instr
 
@@ -62,6 +84,18 @@ def decompress(outstr):
     i -= 1
 
   return s
+
+def get_matches(s,word):
+
+  matches = []
+  i = 0
+  while i<len(s)-len(word):
+    if s[i:i+len(word)]==word:
+      matches.append(i)
+      i += len(word)
+    else:
+      i += 1
+  return matches
 
 class Document(object):
 
