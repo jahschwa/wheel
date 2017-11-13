@@ -3,21 +3,35 @@
 import sys,time,bisect
 from collections import OrderedDict
 
-ESCAPE = '\\'
 #~ BLACKLIST = []
 BLACKLIST = ['\n',' ']
+MIN_WORD = 6
 MAX_WORD_BITS = 4
-MIN_COUNT = 1
+MIN_COUNT = 2
+VERBOSE = False
 DEBUG = False
+DEFAULT_ESCAPE = '\\'
 
-MIN_WORD = 4
 MAX_WORD = 2**MAX_WORD_BITS
 MAX_REL_BITS = 16-MAX_WORD_BITS
 MAX_REL = 2**MAX_REL_BITS
 
 def compress(instr):
 
-  s = instr.replace(ESCAPE,'')
+  escape = DEFAULT_ESCAPE
+  count = instr.count(escape)
+  for i in range(0,256):
+    if count==0:
+      break
+    c = chr(i)
+    found = instr.count(c)
+    if found<count:
+      escape = c
+      count = found
+
+  print 'Chose escape %s (found %s times)' % (hex(ord(escape)),count)
+
+  s = instr.replace(escape,'')
 
   tic = time.time()
   replace = OrderedDict()
@@ -25,7 +39,7 @@ def compress(instr):
   done = len(s)-(MIN_COUNT+1)*MIN_WORD
   while i<done:
     sys.stdout.write('Building dictionary... %.2f%%\r' % (100.0*i/done))
-    for l in range(MAX_WORD+MIN_WORD,MIN_WORD-1,-1):
+    for l in range(MAX_WORD+MIN_WORD-1,MIN_WORD-1,-1):
       word = s[i:i+l]
       skip = False
       for x in BLACKLIST:
@@ -35,52 +49,109 @@ def compress(instr):
       if skip:
         continue
       if word in replace:
-        i += len(word)-1
+        #i += len(word)-1
         break
       replace[word] = s.count(word)
-      if replace[word]>MIN_COUNT:
-        i += len(word)-1
-        break
+      #~ if replace[word]>MIN_COUNT:
+        #~ i += len(word)-1
+        #~ break
     i += 1
+  print 'Building dictionary... 100.00%'
 
-  print '\nSearch took %s sec' % (time.time()-tic)
+  print 'Search took %s sec' % (time.time()-tic)
   print 'Dictionary has %s words (file was %s characters)' % (len(replace),len(s))
 
   tic = time.time()
   replace = [(k,v) for (k,v) in replace.items() if v>MIN_COUNT]
-  x = sorted(replace,key=lambda a:a[1]*(len(a[0])-3),reverse=True)
+  replace = sorted(replace,key=lambda a:a[1]*(len(a[0])-3),reverse=True)
 
-  print 'Found %s words that appeared at least %s times' % (len(x),MIN_COUNT+1)
-  new = []
-  for i in x:
-    add = True
-    for j in new:
-      if i[0] in j[0] or j[0] in i[0]:
-        add = False
-        break
-    if add:
-      new.append(i)
-  print 'Left with %s words after deduplication' % len(new)
+  print 'Found %s words that appeared at least %s times' % (len(replace),MIN_COUNT+1)
   print 'Sorting took %s sec' % (time.time()-tic)
-  print '\n'.join(['%5s "%s"' % (v,k.replace('\n','\\n')) for (k,v) in new[:10]])
+  if VERBOSE:
+    print '\n'.join(['%5s "%s"' % (v,k.replace('\n','\\n')) for (k,v) in replace[:10]])
 
-  
+  tic = time.time()
+  index = []
+  for (i,(word,_)) in enumerate(replace):
+    sys.stdout.write('Indexing... %.2f%%\r' % (100.0*i/len(replace)))
+    matches = get_matches(s,word)
+    for match in matches:
+      index.append((word,match))
+  print 'Indexing... 100.00%'
+  print 'Sorting...'
+  index = sorted(index,key=lambda a:a[1]-len(a[0])/2.0/MAX_WORD)
+  print 'Indexing took %s sec' % (time.time()-tic)
 
-  return instr
+  if VERBOSE:
+    print '\n'.join(['%5s %s' % (i,word.replace('\n','\\n')) for (word,i) in index[:10]])
+
+  tic = time.time()
+  replaced = 0
+  offset = 0
+  first = {}
+  last = -1
+  for (j,(word,i)) in enumerate(index):
+
+    sys.stdout.write('Replacing... %.2f%%\r' % (100.0*j/len(index)))
+
+    if i<last:
+      continue
+
+    i -= offset
+    length = len(word)
+
+    f = first.get(word,None)
+    if f is None:
+      if s[i:i+length]==word:
+        first[word] = i
+      continue
+
+    # TODO: figure out why this check is necessary
+    original = s[f:f+length]
+    if original!=word or original!=s[i:i+length]:
+      continue
+
+    rel = i-f
+    if rel>MAX_REL-1:
+      first[word] = i
+      continue
+
+    if DEBUG:
+      print 'first = "%s"' % s[f:f+length].replace('\n','\\n')
+      print 'word  = "%s"' % word.replace('\n','\\n')
+      print ('%s = %s' % ((f,f+length),(i,i+length)))
+      print s[f:f+length].replace('\n','\\n')
+      print s[i:i+length].replace('\n','\\n')
+    s = s[:i]+escape+encode(rel,length)+s[i+length:]
+    if DEBUG:
+      print '-'*20
+      print s
+      print '='*40
+    last = i+length
+    offset += (length-3)
+    replaced += 1
+
+  print 'Replacing... 100.00%'
+  print 'Replaced %s words in %s sec' % (replaced,time.time()-tic)
+
+  return escape+s
 
 def decompress(outstr):
 
   escape = outstr[0]
   s = outstr[1:]
 
-  i = len(s)-1
+  i = len(s)-2
   while i>=0:
     if s[i]==escape:
       (rel,length) = decode(s[i+1:i+3])
+      s = s[:i]+s[i-rel:i-rel+length]+s[i+3:]
       if DEBUG:
         print ('%s:%s = "%s"'
             % (i-rel,i-rel+length,s[i-rel:i-rel+length].replace('\n','\\n')))
-      s = s[:i]+s[i-rel:i-rel+length]+s[i+3:]
+        print '-'*20
+        print s
+        print '='*40
     i -= 1
 
   return s
@@ -96,6 +167,24 @@ def get_matches(s,word):
     else:
       i += 1
   return matches
+
+def encode(rel,length):
+
+  if DEBUG:
+    print (rel,length)
+  rel = bin(rel)[2:].zfill(MAX_REL_BITS)
+  length = bin(length-MIN_WORD)[2:].zfill(MAX_WORD_BITS)
+  full = rel+length
+  if DEBUG:
+    print full
+  return chr(int(full[:8],2))+chr(int(full[8:],2))
+
+def decode(s):
+
+  s = bin(ord(s[0]))[2:].zfill(8)+bin(ord(s[1]))[2:].zfill(8)
+  rel = int(s[:MAX_REL_BITS],2)
+  length = int(s[MAX_REL_BITS:],2)+MIN_WORD
+  return (rel,length)
 
 class Document(object):
 
@@ -180,6 +269,13 @@ class Range(object):
     new.ranges = [x for x in self.ranges]
     return new
 
+  def __contains__(self,other):
+
+    if not isinstance(other,int):
+      raise TypeError
+
+    return self.intersects(Range(self.length,(other,other)))
+
   def __add__(self,other):
 
     if not isinstance(other,Range):
@@ -215,21 +311,9 @@ class Range(object):
       result[s:e+1] = ['#']*(e-s+1)
     return ''.join(result)
 
-def encode(rel,length):
-
-  rel = bin(rel)[2:].zfill(MAX_REL_BITS)
-  length = bin(length-MIN_WORD)[2:].zfill(MAX_WORD_BITS)
-  full = rel+length
-  return chr(int(full[:8],2))+chr(int(full[8:],2))
-
-def decode(s):
-
-  s = bin(ord(s[0]))[2:].zfill(8)+bin(ord(s[1]))[2:].zfill(8)
-  rel = int(s[:MAX_REL_BITS],2)
-  length = int(s[MAX_REL_BITS:],2)+MIN_WORD
-  return (rel,length)
-
 if __name__=='__main__':
+
+  tic = time.time()
 
   with open(sys.argv[1],'rb') as f:
     s = f.read()
@@ -240,9 +324,11 @@ if __name__=='__main__':
   elif sys.argv[2]=='d':
     s = decompress(s)
   else:
-    raise RuntimeError('invalid option "%s"' % s)
+    raise RuntimeError('invalid option "%s"' % sys.argv[2])
   with open(sys.argv[3],'wb') as f:
     f.write(s)
   outlen = len(s)
 
+  print ''
+  print '%sompressing took %s sec' % (['Dec','C'][sys.argv[2]=='c'],time.time()-tic)
   print '(out %s) / (in %s) = %s%%\n' % (outlen,inlen,100*outlen/inlen)
