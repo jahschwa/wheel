@@ -123,7 +123,7 @@ class Fraction:
     return Fraction(-self.n, self.d)
 
   def __pos__(self):
-    return self
+    return Fraction(self.n, self.d)
 
   def __abs__(self):
     return Fraction(abs(self.n), self.d)
