@@ -59,22 +59,18 @@ class Fraction:
   def gcd(a, b):
     while b:
       (a, b) = (b, a%b)
-    return a
+    return abs(a)
 
   @staticmethod
   def lcm(a, b):
-    return a*b // Fraction.gcd(a, b)
+    return abs(a*b // Fraction.gcd(a, b))
 
   @staticmethod
   def simplify(n, d):
-    negative = False
-    if n * d < 1:
-      negative = True
-    (n, d) = (abs(n), abs(d))
+    neg = (-1 if n * d < 0 else 1)
+    (n, d) = map(abs, (n, d))
     g = Fraction.gcd(n, d)
-    if negative:
-      n = -n
-    return (n//g, d//g)
+    return (neg * n//g, d//g)
 
   ##### Normal methods
 
@@ -179,7 +175,7 @@ class Fraction:
 
   @with_fractions
   def __add__(self, f):
-    l = Fraction.lcm(abs(self.d), abs(f.d))
+    l = Fraction.lcm(self.d, f.d)
     return Fraction(self.n * l // self.d + f.n * l // f.d, l)
   __radd__ = __add__
 
@@ -273,5 +269,5 @@ class Fraction:
 
   @with_fractions
   def __lt__(self, f):
-    l = Fraction.lcm(abs(self.d), abs(f.d))
+    l = Fraction.lcm(self.d, f.d)
     return (self.n * l // self.d) < (f.n * l // f.d)
